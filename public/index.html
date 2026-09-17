@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f8fc" />
+    <meta
+      name="description"
+      content="SpaceMatrix，一至四维张量与 Python 索引的交互式空间。"
+    />
+    <title>SpaceMatrix · 张量空间</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/build/three.module.js",
+          "three/addons/": "/vendor/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="header">
+      <a class="brand" href="/" aria-label="SpaceMatrix 展示页"
+        ><img src="/favicon.svg" alt="" width="34" height="34" /><span
+          >SpaceMatrix</span
+        ></a
+      >
+      <span class="header-divider"></span
+      ><span class="page-name" id="page-name">张量空间</span>
+      <nav class="navigation" aria-label="页面导航">
+        <a href="/" id="display-link">展示</a
+        ><a href="/admin" id="admin-link">管理</a>
+      </nav>
+    </header>
+    <main class="workspace">
+      <aside class="sidebar" id="admin-panel" hidden>
+        <div class="sidebar-heading">
+          <div>
+            <span class="eyebrow">SCENE</span>
+            <h1>对象管理 <span id="object-count">0</span></h1>
+          </div>
+          <button
+            class="icon-button primary-icon"
+            id="add-object"
+            title="添加对象"
+            aria-label="添加对象"
+            data-icon="plus"
+          ></button>
+        </div>
+        <div class="object-list" id="object-list" aria-label="对象列表"></div>
+        <form id="object-form" class="object-form">
+          <div class="section-heading">
+            <h2 id="form-title">对象设置</h2>
+            <span class="save-indicator" id="save-indicator"></span>
+          </div>
+          <label class="field"
+            >对象名称<input
+              id="object-name"
+              name="name"
+              maxlength="60"
+              placeholder="例如 tensor_01"
+              required
+              autocomplete="off"
+          /></label>
+          <div class="field-label">
+            <label for="object-shape">张量形状</label
+            ><span id="rank-badge">3D</span>
+          </div>
+          <input
+            id="object-shape"
+            name="shape"
+            class="mono-input"
+            placeholder="3, 3, 3"
+            required
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <div class="presets" aria-label="维度预设">
+            <button type="button" data-shape="6">1D</button
+            ><button type="button" data-shape="4, 5">2D</button
+            ><button type="button" data-shape="3, 3, 3">3D</button
+            ><button type="button" data-shape="2, 3, 3, 3">4D</button>
+          </div>
+          <p class="field-hint">1–4 个维度 · 每个维度最多 20</p>
+          <div class="color-row">
+            <label for="object-color">方块颜色</label
+            ><input
+              type="color"
+              id="object-color"
+              value="#bbc6de"
+              aria-label="方块颜色"
+            />
+          </div>
+          <div class="section-heading highlight-heading">
+            <h2>
+              <span class="small-icon" data-icon="selection"></span>索引高亮
+            </h2>
+            <button type="button" class="text-button" id="clear-highlight">
+              清空
+            </button>
+          </div>
+          <label class="sr-only" for="object-highlight"
+            >Python 索引表达式</label
+          >
+          <textarea
+            id="object-highlight"
+            rows="2"
+            spellcheck="false"
+            placeholder="a[0, :, :]"
+          ></textarea>
+          <div class="example-list" id="example-list"></div>
+          <div class="color-row">
+            <label for="highlight-color">高亮颜色</label
+            ><input
+              type="color"
+              id="highlight-color"
+              value="#6662e8"
+              aria-label="高亮颜色"
+            />
+          </div>
+          <details class="syntax-help">
+            <summary>索引怎么写？<span data-icon="chevron"></span></summary>
+            <div>
+              <p><code>0</code> 第一个，<code>-1</code> 最后一个</p>
+              <p><code>:</code> 全部，<code>1:3</code> 索引 1 和 2</p>
+              <p><code>::2</code> 每隔一个，<code>...</code> 剩余维度</p>
+              <p>
+                多个区域用
+                <code>;</code> 分隔，重叠部分只计一次。空切片不会选中方块。
+              </p>
+            </div>
+          </details>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <div class="form-actions">
+            <button type="submit" class="button primary" id="save-object">
+              <span data-icon="check"></span
+              ><span id="save-label">保存修改</span></button
+            ><button
+              type="button"
+              id="delete-object"
+              class="icon-button delete-button"
+              aria-label="删除对象"
+              title="删除对象"
+              data-icon="trash"
+            ></button>
+          </div>
+          <p class="field-hint save-hint" id="save-hint">
+            保存后自动同步到展示页
+          </p>
+        </form>
+        <div id="admin-empty" class="admin-empty" hidden>
+          <p>还没有对象</p>
+          <button class="button" id="create-first">添加第一个对象</button>
+        </div>
+      </aside>
+      <section class="stage" id="stage" aria-label="张量展示">
+        <div class="stage-top">
+          <div class="stage-title">
+            <span class="eyebrow" id="stage-eyebrow">TENSOR SPACE</span>
+            <h1 id="stage-title">空间中的张量</h1>
+          </div>
+          <div class="stage-actions">
+            <span class="connection" id="connection" role="status"
+              >正在连接</span
+            ><button
+              class="icon-button"
+              id="fullscreen"
+              title="全屏展示"
+              aria-label="全屏展示"
+              data-icon="expand"
+            ></button>
+          </div>
+        </div>
+        <div class="canvas" id="canvas"></div>
+        <div class="info-card" id="info-card" hidden>
+          <div class="info-top">
+            <span class="info-name" id="info-name"></span
+            ><span class="dimension-tag" id="info-dimension"></span>
+          </div>
+          <div class="info-shape" id="info-shape"></div>
+          <div class="info-count"><span id="info-count"></span> 个方块</div>
+          <div class="selection-info" id="selection-info" hidden>
+            <span class="selection-swatch" id="selection-swatch"></span
+            ><code id="selection-expression"></code
+            ><span id="selection-count"></span>
+          </div>
+        </div>
+        <div class="stage-empty" id="stage-empty" hidden>
+          <span class="empty-cube" data-icon="cube"></span>
+          <h2>从一个张量开始</h2>
+          <p>添加形状，让维度变得可见。</p>
+          <a class="button primary" href="/admin">前往管理页</a>
+        </div>
+        <div class="loading-state" id="loading-state">正在加载张量空间…</div>
+        <div class="view-controls">
+          <button
+            class="icon-button"
+            id="zoom-out"
+            title="缩小"
+            aria-label="缩小"
+            data-icon="minus"
+          ></button
+          ><output id="zoom-value" aria-label="缩放比例">100%</output
+          ><button
+            class="icon-button"
+            id="zoom-in"
+            title="放大"
+            aria-label="放大"
+            data-icon="plus"
+          ></button
+          ><span class="control-divider"></span
+          ><button class="reset-button" id="reset-view">
+            <span data-icon="reset"></span>重置视角
+          </button>
+        </div>
+        <div class="axis-note" id="axis-note">
+          <span class="axis-symbol">↗</span
+          ><span
+            >第一切片在左前方<br /><strong>d0</strong> 右后 ·
+            <strong>d1</strong> 向下 · <strong>d2</strong> 向右前</span
+          >
+        </div>
+        <div class="stage-bottom">
+          <div
+            class="object-tabs"
+            id="object-tabs"
+            aria-label="选择展示对象"
+          ></div>
+          <span class="interaction-hint"
+            >拖动旋转<span>·</span>滚轮缩放<span>·</span>右键平移</span
+          >
+        </div>
+      </section>
+    </main>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <dialog id="delete-dialog">
+      <div class="dialog-icon" data-icon="trash"></div>
+      <h2>删除这个对象？</h2>
+      <p id="delete-description"></p>
+      <div class="dialog-actions">
+        <button class="button" id="cancel-delete">取消</button
+        ><button class="button danger" id="confirm-delete">删除对象</button>
+      </div>
+    </dialog>
+  </body>
+</html>
