@@ -10,21 +10,14 @@ export const UP = [
   (-EYE[2] * EYE[1]) / horizontal,
 ];
 export const PITCH = 1.09;
-export const FLAT_ROTATION = -Math.atan2(RIGHT[2], RIGHT[0]);
 export const dot = (a, b) => a.reduce((sum, n, i) => sum + n * b[i], 0);
 
 export function tensorLayout(shape) {
   const rank = shape.length;
   const [depth, rows, columns] =
     rank >= 3 ? shape.slice(-3) : [1, rank === 2 ? shape[0] : 1, shape.at(-1)];
-  const size =
-    rank >= 3
-      ? [depth * PITCH, rows * PITCH, columns * PITCH]
-      : [
-          columns * PITCH * RIGHT[0] + RIGHT[2],
-          rows * PITCH,
-          columns * PITCH * RIGHT[2] + RIGHT[0],
-        ];
+  // Lower ranks are singleton-depth/height tensors in the same world axes.
+  const size = [depth * PITCH, rows * PITCH, columns * PITCH];
   const projectedWidth = size.reduce(
     (sum, n, i) => sum + Math.abs(n * RIGHT[i]),
     0,
@@ -53,7 +46,7 @@ export function tensorLayout(shape) {
     const x = (index[0] - (depth - 1) / 2) * PITCH;
     const y = ((rows - 1) / 2 - index[1]) * PITCH;
     const z = (index[2] - (columns - 1) / 2) * PITCH;
-    const local = rank >= 3 ? [x, y, z] : [z * RIGHT[0], y, z * RIGHT[2]];
+    const local = [x, y, z];
     return local.map((v, d) => v + batchOffsets[batch][d]);
   };
   const min = [0, 1, 2].map((d) =>

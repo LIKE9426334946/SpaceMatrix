@@ -93,11 +93,20 @@ test("first slice is left/front; depth moves right/back; rows downward", () => {
       dot(layout.cellPosition([0, 1, 0]), UP),
   );
   const line = tensorLayout([6]);
-  assert.ok(
-    Math.abs(
-      dot(line.cellPosition([0]), UP) - dot(line.cellPosition([5]), UP),
-    ) < 1e-10,
-    "1D is horizontal",
-  );
+  const line3D = tensorLayout([1, 1, 6]);
+  for (let i = 0; i < 6; i++) {
+    assert.deepEqual(line.cellPosition([i]), line3D.cellPosition([0, 0, i]));
+  }
+  const plane = tensorLayout([4, 5]);
+  const plane3D = tensorLayout([1, 4, 5]);
+  for (let row = 0; row < 4; row++)
+    for (let column = 0; column < 5; column++) {
+      assert.deepEqual(
+        plane.cellPosition([row, column]),
+        plane3D.cellPosition([0, row, column]),
+      );
+    }
+  assert.deepEqual(line.size, line3D.size);
+  assert.deepEqual(plane.size, plane3D.size);
   assert.equal(tensorLayout([20, 20, 20, 20]).batchOffsets.length, 20);
 });

@@ -1,7 +1,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { elementCount, indexFromLinear, selectRegion } from "./tensor.js";
-import { EYE, RIGHT, UP, FLAT_ROTATION, tensorLayout } from "./layout.js";
+import { EYE, RIGHT, UP, tensorLayout } from "./layout.js";
+
+// A world unit always occupies the same CSS-pixel scale at 100% zoom.
+const PIXELS_PER_UNIT = 64;
 
 export class TensorViewer {
   constructor(container, { onSelect, onZoom } = {}) {
@@ -32,7 +35,7 @@ export class TensorViewer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
     this.controls.screenSpacePanning = true;
-    this.controls.minZoom = 0.08;
+    this.controls.minZoom = 0.01;
     this.controls.maxZoom = 12;
     this.controls.zoomSpeed = 0.8;
     this.controls.addEventListener("change", () => {
@@ -134,10 +137,6 @@ export class TensorViewer {
         : null;
       if (ordinary) group.add(ordinary);
       if (selected) group.add(selected);
-      quaternion.setFromAxisAngle(
-        new THREE.Vector3(0, 1, 0),
-        object.shape.length < 3 ? FLAT_ROTATION : 0,
-      );
       let ordinaryIndex = 0,
         selectedIndex = 0;
       for (let index = 0; index < total; index++) {
@@ -185,8 +184,10 @@ export class TensorViewer {
           new THREE.Vector3(2, 2, 2),
         )
       : bounds;
-    if (geometryChanged) this.reset();
-    else this.requestRender();
+    if (geometryChanged) {
+      this.focusedId = null;
+      this.centerOn(this.bounds);
+    } else this.requestRender();
   }
 
   setActive(id) {
@@ -194,7 +195,19 @@ export class TensorViewer {
       entry.label.classList.toggle("active", entry.id === id);
   }
 
-  fit(bounds, resetDirection = false) {
+  updateProjection() {
+    const halfWidth =
+      Math.max(1, this.container.clientWidth) / (2 * PIXELS_PER_UNIT);
+    const halfHeight =
+      Math.max(1, this.container.clientHeight) / (2 * PIXELS_PER_UNIT);
+    this.camera.left = -halfWidth;
+    this.camera.right = halfWidth;
+    this.camera.top = halfHeight;
+    this.camera.bottom = -halfHeight;
+    this.camera.updateProjectionMatrix();
+  }
+
+  centerOn(bounds, resetDirection = false) {
     const center = bounds.getCenter(new THREE.Vector3());
     const direction = resetDirection
       ? new THREE.Vector3(...EYE)
@@ -208,34 +221,16 @@ export class TensorViewer {
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(center);
     this.camera.updateMatrixWorld(true);
-    const inverse = this.camera.matrixWorldInverse;
-    let maxX = 0,
-      maxY = 0;
-    for (const x of [bounds.min.x, bounds.max.x])
-      for (const y of [bounds.min.y, bounds.max.y])
-        for (const z of [bounds.min.z, bounds.max.z]) {
-          const corner = new THREE.Vector3(x, y, z).applyMatrix4(inverse);
-          maxX = Math.max(maxX, Math.abs(corner.x));
-          maxY = Math.max(maxY, Math.abs(corner.y));
-        }
-    const aspect =
-      Math.max(1, this.container.clientWidth) /
-      Math.max(1, this.container.clientHeight);
-    this.halfHeight = Math.max(1.6, maxY, maxX / aspect) * 1.65;
-    this.camera.left = -this.halfHeight * aspect;
-    this.camera.right = this.halfHeight * aspect;
-    this.camera.top = this.halfHeight;
-    this.camera.bottom = -this.halfHeight;
-    this.camera.zoom = 1;
-    this.camera.updateProjectionMatrix();
+    this.updateProjection();
     this.controls.update();
-    this.onZoom?.(1);
+    this.onZoom?.(this.camera.zoom);
     this.requestRender();
   }
 
   reset() {
     this.focusedId = null;
-    this.fit(
+    this.camera.zoom = 1;
+    this.centerOn(
       this.bounds ||
         new THREE.Box3(
           new THREE.Vector3(-2, -2, -2),
@@ -248,7 +243,7 @@ export class TensorViewer {
     const entry = this.entries.find((e) => e.id === id);
     if (entry) {
       this.focusedId = id;
-      this.fit(entry.bounds);
+      this.centerOn(entry.bounds);
     }
   }
   zoom(factor) {
@@ -266,15 +261,7 @@ export class TensorViewer {
       this.container.clientWidth,
       this.container.clientHeight,
     );
-    if (this.bounds) {
-      const zoom = this.camera.zoom;
-      const bounds =
-        this.entries.find((e) => e.id === this.focusedId)?.bounds ||
-        this.bounds;
-      this.fit(bounds);
-      this.camera.zoom = zoom;
-      this.camera.updateProjectionMatrix();
-    }
+    this.updateProjection();
     this.requestRender();
   }
 }
