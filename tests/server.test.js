@@ -5,7 +5,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { rotateTensor } from "../public/rotation.js";
+import { transposeTensor } from "../public/transpose.js";
 
 test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", async (t) => {
   const data = await mkdtemp(path.join(tmpdir(), "spacematrix-test-"));
@@ -89,25 +89,26 @@ test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", a
   assert.equal(created.objects.length, 2);
   const id = created.objects.at(-1).id;
   assert.match(new TextDecoder().decode((await reader.read()).value), /batch/);
-  const [rotationStatus, rotated] = await request(
-    `/api/objects/${id}/rotate`,
+  const [transposeStatus, transposed] = await request(
+    `/api/objects/${id}/transpose`,
     "POST",
-    { direction: "up" },
+    { dim0: 1, dim1: 2 },
   );
-  assert.equal(rotationStatus, 200);
+  assert.equal(transposeStatus, 200);
   assert.deepEqual(
-    rotated.objects.at(-1),
-    rotateTensor(created.objects.at(-1), "up"),
+    transposed.objects.at(-1),
+    transposeTensor(created.objects.at(-1), 1, 2),
   );
-  assert.deepEqual(rotated.transition, {
-    type: "rotate",
+  assert.deepEqual(transposed.transition, {
+    type: "transpose",
     objectId: id,
-    direction: "up",
+    dim0: 1,
+    dim1: 2,
     fromRevision: created.revision,
   });
-  const rotationEvent = new TextDecoder().decode((await reader.read()).value);
-  assert.match(rotationEvent, /"type":"rotate"/);
-  assert.match(rotationEvent, /"direction":"up"/);
+  const transposeEvent = new TextDecoder().decode((await reader.read()).value);
+  assert.match(transposeEvent, /"type":"transpose"/);
+  assert.match(transposeEvent, /"dim0":1,"dim1":2/);
   assert.equal(
     (await request("/api/scene"))[1].transition,
     undefined,
@@ -115,15 +116,25 @@ test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", a
   );
   assert.equal(
     (
-      await request(`/api/objects/${id}/rotate`, "POST", {
-        direction: "invalid",
+      await request(`/api/objects/${id}/rotate`, "POST", { direction: "up" })
+    )[0],
+    410,
+  );
+  assert.equal(
+    (
+      await request(`/api/objects/${id}/transpose`, "POST", {
+        dim0: 4,
+        dim1: 1,
       })
     )[0],
     400,
   );
   assert.equal(
     (
-      await request("/api/objects/missing/rotate", "POST", { direction: "up" })
+      await request("/api/objects/missing/transpose", "POST", {
+        dim0: 0,
+        dim1: 1,
+      })
     )[0],
     404,
   );
@@ -131,7 +142,7 @@ test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", a
   await reader.cancel().catch(() => {});
   const invalid = await request("/api/objects/" + id, "PATCH", { shape: [21] });
   assert.equal(invalid[0], 400);
-  assert.equal((await request("/api/scene"))[1].revision, rotated.revision);
+  assert.equal((await request("/api/scene"))[1].revision, transposed.revision);
   assert.equal(
     (
       await request("/api/objects", "POST", { ...input, highlight: "a[99]" })
@@ -148,8 +159,8 @@ test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", a
     request("/api/objects/" + id, "PATCH", { highlight: "a[1,...]" }),
   ]);
   await Promise.all([
-    request(`/api/objects/${id}/rotate`, "POST", { direction: "left" }),
-    request(`/api/objects/${id}/rotate`, "POST", { direction: "left" }),
+    request(`/api/objects/${id}/transpose`, "POST", { dim0: -4, dim1: -1 }),
+    request(`/api/objects/${id}/transpose`, "POST", { dim0: 0, dim1: 3 }),
   ]);
   const saved = (await request("/api/scene"))[1];
   assert.equal(saved.objects.at(-1).name, "renamed");

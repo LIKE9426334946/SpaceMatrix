@@ -217,56 +217,33 @@
           </button>
           <span class="control-divider"></span>
           <button
-            class="reset-button flip-toggle"
-            id="flip-toggle"
+            class="reset-button transpose-toggle"
+            id="transpose-toggle"
             aria-expanded="false"
-            aria-controls="flip-panel"
+            aria-controls="transpose-panel"
             disabled
           >
-            <span data-icon="flip"></span>翻转
+            <span data-icon="transpose"></span>交换维度
           </button>
           <div
-            class="flip-panel"
-            id="flip-panel"
+            class="transpose-panel"
+            id="transpose-panel"
             role="group"
-            aria-label="翻转选中的张量"
+            aria-label="交换选中张量的两个维度"
             hidden
           >
-            <div class="flip-heading">
-              <strong id="flip-name">翻转张量</strong><span>每次 90°</span>
+            <div class="transpose-heading">
+              <strong id="transpose-name">维度交换</strong
+              ><span>TRANSPOSE</span>
             </div>
             <output
-              id="flip-shape"
-              class="flip-shape"
+              id="transpose-shape"
+              class="transpose-shape"
               aria-live="polite"
             ></output>
-            <div class="flip-directions">
-              <button type="button" data-flip="up" aria-label="向上翻转 90 度">
-                <span data-icon="up"></span>向上
-              </button>
-              <button
-                type="button"
-                data-flip="down"
-                aria-label="向下翻转 90 度"
-              >
-                <span data-icon="down"></span>向下
-              </button>
-              <button
-                type="button"
-                data-flip="left"
-                aria-label="向左翻转 90 度"
-              >
-                <span data-icon="left"></span>向左
-              </button>
-              <button
-                type="button"
-                data-flip="right"
-                aria-label="向右翻转 90 度"
-              >
-                <span data-icon="right"></span>向右
-              </button>
-            </div>
-            <p id="flip-hint">高亮随方块移动 · 翻转后自动保存</p>
+            <code id="transpose-expression">选择两个维度编号</code>
+            <div class="transpose-pairs" id="transpose-pairs"></div>
+            <p id="transpose-hint">交换轴，不反转索引 · 自动保存</p>
           </div>
         </div>
         <div class="axis-note" id="axis-note">

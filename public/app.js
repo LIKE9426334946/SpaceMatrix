@@ -6,7 +6,7 @@ import {
   selectRegion,
   examplesFor,
 } from "./tensor.js";
-import { rotatedShape, rotationSpec } from "./rotation.js";
+import { transposedShape } from "./transpose.js";
 
 const icons = {
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -14,11 +14,7 @@ const icons = {
   cube: '<path d="m12 3 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8"/>',
   expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
   reset: '<path d="M3 10a9 9 0 1 1 2.5 8M3 4v6h6"/>',
-  flip: '<path d="M4 8h12l-3-3m7 11H8l3 3M20 8l-4-4M4 16l4 4"/>',
-  up: '<path d="M12 20V4m-6 6 6-6 6 6"/>',
-  down: '<path d="M12 4v16m-6-6 6 6 6-6"/>',
-  left: '<path d="M20 12H4m6-6-6 6 6 6"/>',
-  right: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
+  transpose: '<path d="M4 8h12l-3-3m7 11H8l3 3M20 8l-4-4M4 16l4 4"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 10v7m4-7v7"/>',
   chevron: '<path d="m9 5 7 7-7 7"/>',
@@ -48,7 +44,7 @@ let dirty = false;
 let saving = false;
 let animating = false;
 let sceneUpdates = Promise.resolve();
-let flipMessage = "";
+let transposeMessage = "";
 let viewer;
 let toastTimer;
 
@@ -85,7 +81,7 @@ function activeObject() {
 }
 
 function updateInfo(object = activeObject()) {
-  updateFlipControls();
+  updateTransposeControls();
   $("info-card").hidden = !object;
   $("axis-note").hidden = !object || object.shape.length < 3;
   if (!object) return;
@@ -139,7 +135,7 @@ function markDirty(value) {
   $("save-hint").textContent = value
     ? "预览尚未保存 · 点击保存同步到展示页"
     : "保存后自动同步到展示页";
-  updateFlipControls();
+  updateTransposeControls();
 }
 
 function fillForm(object) {
@@ -211,7 +207,7 @@ async function applyScene(next, force) {
     viewer &&
     !dirty &&
     !isNew &&
-    transition?.type === "rotate" &&
+    transition?.type === "transpose" &&
     transition.fromRevision === scene.revision &&
     scene.objects.some((object) => object.id === transition.objectId);
   if (shouldAnimate) {
@@ -222,22 +218,23 @@ async function applyScene(next, force) {
     const after = next.objects.find(
       (object) => object.id === transition.objectId,
     );
-    flipMessage =
+    transposeMessage =
       transition.objectId === activeId
         ? `${formatShape(before.shape)} → ${formatShape(after.shape)}`
         : "";
     updateBusyControls();
     try {
-      await viewer.animateRotation(
+      await viewer.animateTranspose(
         transition.objectId,
-        transition.direction,
+        transition.dim0,
+        transition.dim1,
         next.objects,
       );
     } catch (error) {
       console.error(error);
     } finally {
       animating = false;
-      flipMessage = "";
+      transposeMessage = "";
     }
   }
   scene = next;
@@ -328,76 +325,108 @@ function updateBusyControls() {
   $("object-form").inert = busy;
   $("object-list").inert = busy;
   $("object-tabs").inert = busy;
-  updateFlipControls();
+  updateTransposeControls();
 }
 
-function updateFlipControls(direction) {
+function updateTransposeControls(dims) {
   const object = activeObject();
   const blocked = !object || !viewer || saving || animating || dirty || isNew;
-  $("flip-toggle").disabled = !object || !viewer;
-  document.querySelectorAll("[data-flip]").forEach((el) => {
+  const rank = object?.shape.length || 0;
+  const pairs = $("transpose-pairs");
+  if (pairs.dataset.rank !== String(rank)) {
+    pairs.dataset.rank = String(rank);
+    pairs.replaceChildren();
+    for (let dim0 = 0; dim0 < rank; dim0++) {
+      for (let dim1 = dim0 + 1; dim1 < rank; dim1++) {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.dataset.transpose = `${dim0},${dim1}`;
+        el.textContent = `${dim0} ↔ ${dim1}`;
+        el.title = `a.transpose(${dim0}, ${dim1})`;
+        el.setAttribute("aria-label", `交换第 ${dim0} 维和第 ${dim1} 维`);
+        pairs.append(el);
+      }
+    }
+  }
+  pairs.hidden = rank < 2;
+  $("transpose-toggle").disabled = !object || !viewer;
+  document.querySelectorAll("[data-transpose]").forEach((el) => {
     el.disabled = blocked;
   });
-  $("flip-name").textContent = object ? `翻转 ${object.name}` : "翻转张量";
-  $("flip-shape").textContent =
-    flipMessage ||
+  $("transpose-name").textContent = object ? object.name : "维度交换";
+  $("transpose-shape").textContent =
+    transposeMessage ||
     (!object
       ? "请选择一个对象"
-      : direction && !blocked
-        ? `${formatShape(object.shape)} → ${formatShape(rotatedShape(object.shape, direction))}`
+      : dims && !blocked
+        ? `${formatShape(object.shape)} → ${formatShape(transposedShape(object.shape, ...dims))}`
         : formatShape(object.shape));
-  $("flip-hint").textContent =
+  $("transpose-expression").textContent =
+    dims && !blocked ? `a.transpose(${dims.join(", ")})` : "选择两个维度编号";
+  $("transpose-hint").textContent =
     dirty || isNew
-      ? "请先保存当前修改，再翻转"
+      ? "请先保存当前修改，再交换维度"
       : animating
-        ? "正在翻转…"
+        ? "正在交换维度…"
         : saving
           ? "正在保存…"
-          : "高亮随方块移动 · 翻转后自动保存";
+          : rank === 1
+            ? "一维张量没有两个不同的维度可交换"
+            : "交换轴，不反转索引 · 自动保存";
 }
 
-function closeFlipPanel() {
-  $("flip-panel").hidden = true;
-  $("flip-toggle").setAttribute("aria-expanded", "false");
+function closeTransposePanel() {
+  $("transpose-panel").hidden = true;
+  $("transpose-toggle").setAttribute("aria-expanded", "false");
 }
 
-$("flip-toggle").addEventListener("click", () => {
-  const open = $("flip-panel").hidden;
-  $("flip-panel").hidden = !open;
-  $("flip-toggle").setAttribute("aria-expanded", String(open));
-  updateFlipControls();
+$("transpose-toggle").addEventListener("click", () => {
+  const open = $("transpose-panel").hidden;
+  $("transpose-panel").hidden = !open;
+  $("transpose-toggle").setAttribute("aria-expanded", String(open));
+  updateTransposeControls();
 });
 document.addEventListener("pointerdown", (event) => {
-  if (!event.target.closest(".view-controls")) closeFlipPanel();
+  if (!event.target.closest(".view-controls")) closeTransposePanel();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !$("flip-panel").hidden) {
-    closeFlipPanel();
-    $("flip-toggle").focus();
+  if (event.key === "Escape" && !$("transpose-panel").hidden) {
+    closeTransposePanel();
+    $("transpose-toggle").focus();
   }
 });
-document.querySelectorAll("[data-flip]").forEach((el) => {
-  el.addEventListener("mouseenter", () => updateFlipControls(el.dataset.flip));
-  el.addEventListener("focus", () => updateFlipControls(el.dataset.flip));
-  el.addEventListener("mouseleave", () => updateFlipControls());
-  el.addEventListener("blur", () => updateFlipControls());
-  el.addEventListener("click", async () => {
-    if (saving || animating || dirty || isNew || !activeObject()) return;
-    closeFlipPanel();
-    $("flip-toggle").focus();
-    setSaving(true);
-    try {
-      const next = await request(`/api/objects/${activeId}/rotate`, "POST", {
-        direction: el.dataset.flip,
-      });
-      await acceptScene(next);
-      toast(`已${rotationSpec(el.dataset.flip).label}翻转 90°，形状已保存`);
-    } catch (error) {
-      toast(error.message, true);
-    } finally {
-      setSaving(false);
-    }
+for (const eventName of ["mouseover", "focusin"]) {
+  $("transpose-pairs").addEventListener(eventName, (event) => {
+    const el = event.target.closest("[data-transpose]");
+    if (el)
+      updateTransposeControls(el.dataset.transpose.split(",").map(Number));
   });
+}
+for (const eventName of ["mouseleave", "focusout"]) {
+  $("transpose-pairs").addEventListener(eventName, () =>
+    updateTransposeControls(),
+  );
+}
+$("transpose-pairs").addEventListener("click", async (event) => {
+  const el = event.target.closest("[data-transpose]");
+  if (!el) return;
+  if (saving || animating || dirty || isNew || !activeObject()) return;
+  const [dim0, dim1] = el.dataset.transpose.split(",").map(Number);
+  closeTransposePanel();
+  $("transpose-toggle").focus();
+  setSaving(true);
+  try {
+    const next = await request(`/api/objects/${activeId}/transpose`, "POST", {
+      dim0,
+      dim1,
+    });
+    await acceptScene(next);
+    toast(`已交换第 ${dim0}、${dim1} 维，形状与索引已保存`);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setSaving(false);
+  }
 });
 
 function addObject() {

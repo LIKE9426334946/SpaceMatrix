@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { elementCount, indexFromLinear, selectRegion } from "./tensor.js";
 import { EYE, UP, sceneLayout } from "./layout.js";
-import { rotationSpec } from "./rotation.js";
+import { swapAxes, transposeDimensions } from "./transpose.js";
 
 // A world unit always occupies the same CSS-pixel scale at 100% zoom.
 const PIXELS_PER_UNIT = 64;
@@ -120,6 +120,7 @@ export class TensorViewer {
       this.scene.remove(entry.group);
       entry.group.traverse((child) => {
         if (child.isMesh) {
+          if (child.geometry !== this.geometry) child.geometry.dispose();
           child.material.dispose();
           child.dispose();
         }
@@ -147,7 +148,7 @@ export class TensorViewer {
           opacity: faded ? 0.13 : 1,
           depthWrite: !faded,
         });
-      // Each 4D batch rotates around its own center, rather than orbiting as a group.
+      // Keep batches separate, and retain the source index of each drawn cell.
       const batches = [];
       const perBatch = total / layout.batchOffsets.length;
       layout.batchOffsets.forEach((batchOffset, batchIndex) => {
@@ -177,6 +178,7 @@ export class TensorViewer {
         for (const mesh of [ordinary, selected])
           if (mesh) {
             mesh.userData.objectId = object.id;
+            mesh.userData.cellIndices = new Uint32Array(mesh.count);
             batch.add(mesh);
           }
         let ordinaryIndex = 0,
@@ -187,9 +189,12 @@ export class TensorViewer {
           );
           position.sub(batch.position);
           matrix.compose(position, quaternion, scale);
-          if (selection.mask[index])
-            selected.setMatrixAt(selectedIndex++, matrix);
-          else ordinary.setMatrixAt(ordinaryIndex++, matrix);
+          const mesh = selection.mask[index] ? selected : ordinary;
+          const instance = selection.mask[index]
+            ? selectedIndex++
+            : ordinaryIndex++;
+          mesh.setMatrixAt(instance, matrix);
+          mesh.userData.cellIndices[instance] = index;
         }
         for (const mesh of [ordinary, selected])
           if (mesh) {
@@ -216,6 +221,8 @@ export class TensorViewer {
         .add(offset);
       this.entries.push({
         id: object.id,
+        shape: [...object.shape],
+        layout,
         group,
         batches,
         bounds: objectBounds,
@@ -237,10 +244,15 @@ export class TensorViewer {
     } else this.requestRender();
   }
 
-  async animateRotation(id, direction, objects) {
+  async animateTranspose(id, dim0, dim1, objects) {
     const selected = this.entries.find((entry) => entry.id === id);
     if (!selected) return;
-    const spec = rotationSpec(direction);
+    const dims = transposeDimensions(selected.shape.length, dim0, dim1);
+    if (dims[0] === dims[1]) return;
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches
+      ? 0
+      : 800;
     const layouts = sceneLayout(objects);
     const bounds = new THREE.Box3();
     const targets = new Map(
@@ -263,10 +275,54 @@ export class TensorViewer {
         target: targets.get(entry.id),
       }))
       .filter((item) => item.target);
-    const batchStarts = selected.batches.map((batch) => batch.position.clone());
-    const batchEnds = targets
-      .get(id)
-      .layout.batchOffsets.map((point) => new THREE.Vector3(...point));
+    const targetLayout = targets.get(id).layout;
+    const progressUniform = { value: 0 };
+    const delta = new THREE.Vector3(),
+      arc = new THREE.Vector3();
+    const eye = new THREE.Vector3(...EYE);
+    // GPU interpolation keeps 160,000 cells animated without updating every
+    // instance matrix on every frame. Each instance keeps its own highlight.
+    if (duration)
+      selected.group.traverse((mesh) => {
+        if (!mesh.isInstancedMesh) return;
+        const deltas = new Float32Array(mesh.count * 3);
+        const arcs = new Float32Array(mesh.count * 3);
+        mesh.userData.cellIndices.forEach((linear, instance) => {
+          const coords = indexFromLinear(linear, selected.shape);
+          const source = selected.layout.cellPosition(coords);
+          const destination = targetLayout.cellPosition(
+            swapAxes(coords, ...dims),
+          );
+          delta.set(...destination).sub(new THREE.Vector3(...source));
+          delta.toArray(deltas, instance * 3);
+          // Opposite journeys bow in opposite directions instead of collapsing
+          // all the swapped rows onto the same plane at the animation midpoint.
+          arc.crossVectors(delta, eye).multiplyScalar(0.35);
+          arc.toArray(arcs, instance * 3);
+        });
+        mesh.geometry = this.geometry.clone();
+        mesh.geometry.setAttribute(
+          "transposeDelta",
+          new THREE.InstancedBufferAttribute(deltas, 3),
+        );
+        mesh.geometry.setAttribute(
+          "transposeArc",
+          new THREE.InstancedBufferAttribute(arcs, 3),
+        );
+        mesh.frustumCulled = false;
+        mesh.material.onBeforeCompile = (shader) => {
+          shader.uniforms.transposeProgress = progressUniform;
+          shader.vertexShader =
+            `attribute vec3 transposeDelta;\nattribute vec3 transposeArc;\nuniform float transposeProgress;\n${shader.vertexShader}`.replace(
+              "#include <begin_vertex>",
+              `#include <begin_vertex>
+            transformed += transposeDelta * transposeProgress
+              + transposeArc * sin(3.141592653589793 * transposeProgress);`,
+            );
+        };
+        mesh.material.customProgramCacheKey = () => "tensor-transpose-v1";
+        mesh.material.needsUpdate = true;
+      });
     const oldAnchor =
       this.entries.find((entry) => entry.id === this.focusedId)?.bounds ||
       this.bounds;
@@ -276,11 +332,6 @@ export class TensorViewer {
       .sub(oldAnchor.getCenter(new THREE.Vector3()));
     const cameraStart = this.camera.position.clone();
     const targetStart = this.controls.target.clone();
-    const axis = new THREE.Vector3(...spec.axis);
-    const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
-      .matches
-      ? 0
-      : 650;
     this.animating = true;
     this.controls.enabled = false;
     try {
@@ -299,10 +350,7 @@ export class TensorViewer {
               .add(target.offset);
             entry.labelPoint.lerpVectors(labelFrom, labelEnd, t);
           }
-          selected.batches.forEach((batch, index) => {
-            batch.quaternion.setFromAxisAngle(axis, spec.angle * t);
-            batch.position.lerpVectors(batchStarts[index], batchEnds[index], t);
-          });
+          progressUniform.value = t;
           this.camera.position.copy(cameraStart).addScaledVector(shift, t);
           this.controls.target.copy(targetStart).addScaledVector(shift, t);
           this.requestRender();

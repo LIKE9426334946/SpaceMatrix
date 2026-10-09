@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { parseShape, selectRegion } from "../public/tensor.js";
-import { rotateTensor } from "../public/rotation.js";
+import { transposeDimensions, transposeTensor } from "../public/transpose.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = process.env.DATA_DIR || path.join(root, "backend/data");
@@ -59,7 +59,7 @@ function mutate(action) {
     await rename(`${dataFile}.tmp`, dataFile);
     state = next;
     const update =
-      transition?.type === "rotate"
+      transition?.type === "transpose"
         ? { ...state, transition: { ...transition, fromRevision } }
         : state;
     for (const client of clients)
@@ -148,20 +148,35 @@ const server = http.createServer(async (req, res) => {
         );
         return json(res, 201, saved);
       }
-      const rotation = route.match(/^\/api\/objects\/([\w-]+)\/rotate$/);
-      if (rotation && req.method === "POST") {
-        const { direction } = await body(req);
+      if (
+        /^\/api\/objects\/[\w-]+\/rotate$/.test(route) &&
+        req.method === "POST"
+      )
+        return json(res, 410, { error: "请刷新页面后使用“交换维度”功能。" });
+      const transpose = route.match(/^\/api\/objects\/([\w-]+)\/transpose$/);
+      if (transpose && req.method === "POST") {
+        const { dim0, dim1 } = await body(req);
         const saved = await mutate((next) => {
           const index = next.objects.findIndex(
-            (object) => object.id === rotation[1],
+            (object) => object.id === transpose[1],
           );
           if (index < 0)
             throw Object.assign(new Error("这个对象已被删除。"), {
               status: 404,
             });
-          const rotated = rotateTensor(next.objects[index], direction);
-          next.objects[index] = { id: rotated.id, ...validateObject(rotated) };
-          return { type: "rotate", objectId: rotated.id, direction };
+          const object = next.objects[index];
+          const dims = transposeDimensions(object.shape.length, dim0, dim1);
+          const transposed = transposeTensor(object, ...dims);
+          next.objects[index] = {
+            id: object.id,
+            ...validateObject(transposed),
+          };
+          return {
+            type: "transpose",
+            objectId: object.id,
+            dim0: dims[0],
+            dim1: dims[1],
+          };
         });
         return json(res, 200, saved);
       }
