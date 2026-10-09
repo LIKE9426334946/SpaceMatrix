@@ -243,6 +243,28 @@
             ></output>
             <code id="transpose-expression">选择两个维度编号</code>
             <div class="transpose-pairs" id="transpose-pairs"></div>
+            <div class="animation-speed-control">
+              <div class="animation-speed-heading">
+                <label for="animation-speed">动画速度</label>
+                <output id="animation-speed-value" for="animation-speed"
+                  >1×</output
+                >
+              </div>
+              <input
+                id="animation-speed"
+                type="range"
+                min="0.25"
+                max="2"
+                step="0.25"
+                value="1"
+                aria-describedby="animation-duration"
+                title="向左减慢，向右加快；播放中也可调节"
+              />
+              <div class="animation-speed-scale">
+                <span>慢</span><span id="animation-duration">单次约 2 秒</span
+                ><span>快</span>
+              </div>
+            </div>
             <p id="transpose-hint">交换轴，不反转索引 · 自动保存</p>
           </div>
         </div>

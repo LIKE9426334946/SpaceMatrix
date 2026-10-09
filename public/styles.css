@@ -472,6 +472,38 @@ a svg {
   font-family: var(--mono);
   font-size: 11px;
 }
+.animation-speed-control {
+  margin-top: 15px;
+  padding-top: 13px;
+  border-top: 1px solid #e4e6ef;
+}
+.animation-speed-heading,
+.animation-speed-scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.animation-speed-heading {
+  font-size: 12px;
+}
+.view-controls #animation-speed-value {
+  width: auto;
+  font-family: var(--mono);
+  color: var(--accent);
+}
+#animation-speed {
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin: 6px 0 2px;
+  padding: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.animation-speed-scale {
+  font-size: 10px;
+  color: #8a90a3;
+}
 .transpose-panel p {
   margin: 12px 0 0;
   font-size: 11px;

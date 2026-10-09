@@ -1,4 +1,4 @@
-import { TensorViewer } from "./viewer.js";
+import { TensorViewer, ANIMATION_DURATION_MS } from "./viewer.js";
 import {
   parseShape,
   formatShape,
@@ -67,6 +67,44 @@ try {
     "无法创建三维画布，请启用浏览器硬件加速后刷新。";
   console.error(error);
 }
+
+const ANIMATION_SPEED_KEY = "spacematrix.animationSpeed";
+function applyAnimationSpeed(value, persist = false) {
+  const speed = viewer?.setAnimationSpeed(value) ?? 1;
+  const duration = (ANIMATION_DURATION_MS / speed / 1000).toLocaleString(
+    "zh-CN",
+    { maximumFractionDigits: 1 },
+  );
+  $("animation-speed").value = String(speed);
+  $("animation-speed").disabled = !viewer;
+  $("animation-speed").setAttribute(
+    "aria-valuetext",
+    `${speed} 倍速，单次约 ${duration} 秒`,
+  );
+  $("animation-speed-value").textContent = `${speed}×`;
+  $("animation-duration").textContent = `单次约 ${duration} 秒`;
+  if (persist) {
+    try {
+      localStorage.setItem(ANIMATION_SPEED_KEY, String(speed));
+    } catch {
+      /* Keep the setting for this page when storage is unavailable. */
+    }
+  }
+}
+let savedAnimationSpeed = 1;
+try {
+  savedAnimationSpeed = localStorage.getItem(ANIMATION_SPEED_KEY) ?? 1;
+} catch {
+  /* Use the default speed. */
+}
+applyAnimationSpeed(savedAnimationSpeed);
+$("animation-speed").addEventListener("input", (event) =>
+  applyAnimationSpeed(event.target.value, true),
+);
+window.addEventListener("storage", (event) => {
+  if (event.key === ANIMATION_SPEED_KEY || event.key === null)
+    applyAnimationSpeed(event.newValue ?? 1);
+});
 
 function button(className, title, contents) {
   const el = document.createElement("button");

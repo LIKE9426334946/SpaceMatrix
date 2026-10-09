@@ -6,6 +6,7 @@ import { swapAxes, transposeDimensions } from "./transpose.js";
 
 // A world unit always occupies the same CSS-pixel scale at 100% zoom.
 const PIXELS_PER_UNIT = 64;
+export const ANIMATION_DURATION_MS = 2000;
 
 export class TensorViewer {
   constructor(container, { onSelect, onZoom } = {}) {
@@ -13,6 +14,7 @@ export class TensorViewer {
     this.onSelect = onSelect;
     this.onZoom = onZoom;
     this.entries = [];
+    this.animationSpeed = 1;
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.01, 10000);
     this.renderer = new THREE.WebGLRenderer({
@@ -244,6 +246,18 @@ export class TensorViewer {
     } else this.requestRender();
   }
 
+  setAnimationSpeed(value) {
+    const speed = Number(value);
+    this.animationSpeed =
+      Number.isFinite(speed) &&
+      speed >= 0.25 &&
+      speed <= 2 &&
+      Number.isInteger(speed * 4)
+        ? speed
+        : 1;
+    return this.animationSpeed;
+  }
+
   async animateTranspose(id, dim0, dim1, objects) {
     const selected = this.entries.find((entry) => entry.id === id);
     if (!selected) return;
@@ -252,7 +266,7 @@ export class TensorViewer {
     const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
       .matches
       ? 0
-      : 800;
+      : ANIMATION_DURATION_MS;
     const layouts = sceneLayout(objects);
     const bounds = new THREE.Box3();
     const targets = new Map(
@@ -336,9 +350,14 @@ export class TensorViewer {
     this.controls.enabled = false;
     try {
       await new Promise((resolve) => {
-        const start = performance.now();
+        let previousTime = performance.now();
+        let elapsed = 0;
         const tick = (now) => {
-          const progress = duration ? Math.min(1, (now - start) / duration) : 1;
+          // Integrate playback time so speed changes take effect mid-animation
+          // without jumping forward or restarting the movement.
+          elapsed += Math.max(0, now - previousTime) * this.animationSpeed;
+          previousTime = now;
+          const progress = duration ? Math.min(1, elapsed / duration) : 1;
           const t =
             progress < 0.5
               ? 4 * progress ** 3
