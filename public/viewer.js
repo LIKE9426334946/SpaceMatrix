@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { elementCount, indexFromLinear, selectRegion } from "./tensor.js";
-import { EYE, RIGHT, UP, tensorLayout } from "./layout.js";
+import { EYE, UP, sceneLayout } from "./layout.js";
+import { rotationSpec } from "./rotation.js";
 
 // A world unit always occupies the same CSS-pixel scale at 100% zoom.
 const PIXELS_PER_UNIT = 64;
@@ -42,6 +43,42 @@ export class TensorViewer {
       this.requestRender();
       this.onZoom?.(this.camera.zoom);
     });
+    const canvas = this.renderer.domElement;
+    canvas.addEventListener("pointerdown", (event) => {
+      this.pointerStart =
+        event.button === 0
+          ? { x: event.clientX, y: event.clientY, id: event.pointerId }
+          : null;
+    });
+    canvas.addEventListener("pointerup", (event) => {
+      const start = this.pointerStart;
+      this.pointerStart = null;
+      if (
+        this.animating ||
+        !start ||
+        start.id !== event.pointerId ||
+        Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5
+      )
+        return;
+      const rect = canvas.getBoundingClientRect();
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(
+        new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          (-(event.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        this.camera,
+      );
+      this.scene.updateMatrixWorld(true);
+      const hit = ray.intersectObjects(
+        this.entries.map((entry) => entry.group),
+        true,
+      )[0];
+      if (hit) this.onSelect?.(hit.object.userData.objectId);
+    });
+    canvas.addEventListener("pointercancel", () => {
+      this.pointerStart = null;
+    });
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.65));
     const light = new THREE.DirectionalLight(0xffffff, 2.25);
     light.position.set(-8, 14, 9);
@@ -74,7 +111,7 @@ export class TensorViewer {
     });
   }
 
-  setObjects(objects) {
+  setObjects(objects, { preserveCamera = false } = {}) {
     // Keep the camera stable for color/highlight/name edits and server updates.
     const geometryKey = JSON.stringify(objects.map((o) => [o.id, o.shape]));
     const geometryChanged = geometryKey !== this.geometryKey;
@@ -90,11 +127,7 @@ export class TensorViewer {
     }
     this.entries = [];
     this.labels.replaceChildren();
-    const layouts = objects.map((o) => tensorLayout(o.shape));
-    const columns = Math.ceil(Math.sqrt(objects.length));
-    const rows = Math.ceil(objects.length / (columns || 1));
-    const cellWidth = Math.max(1, ...layouts.map((l) => l.width)) + 5;
-    const cellHeight = Math.max(1, ...layouts.map((l) => l.height)) + 5;
+    const layouts = sceneLayout(objects);
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const position = new THREE.Vector3();
@@ -102,13 +135,7 @@ export class TensorViewer {
     const bounds = new THREE.Box3();
     objects.forEach((object, objectIndex) => {
       const layout = layouts[objectIndex];
-      const row = Math.floor(objectIndex / columns);
-      const inRow = Math.min(columns, objects.length - row * columns);
-      const across = ((objectIndex % columns) - (inRow - 1) / 2) * cellWidth;
-      const above = ((rows - 1) / 2 - row) * cellHeight;
-      const offset = new THREE.Vector3(
-        ...RIGHT.map((v, d) => v * across + UP[d] * above),
-      );
+      const offset = new THREE.Vector3(...layout.offset);
       const group = new THREE.Group();
       group.position.copy(offset);
       const selection = selectRegion(object.shape, object.highlight);
@@ -120,39 +147,56 @@ export class TensorViewer {
           opacity: faded ? 0.13 : 1,
           depthWrite: !faded,
         });
-      const ordinaryCount = total - selection.count;
-      const ordinary = ordinaryCount
-        ? new THREE.InstancedMesh(
-            this.geometry,
-            material(object.color, selection.count > 0),
-            ordinaryCount,
-          )
-        : null;
-      const selected = selection.count
-        ? new THREE.InstancedMesh(
-            this.geometry,
-            material(object.highlightColor, false),
-            selection.count,
-          )
-        : null;
-      if (ordinary) group.add(ordinary);
-      if (selected) group.add(selected);
-      let ordinaryIndex = 0,
-        selectedIndex = 0;
-      for (let index = 0; index < total; index++) {
-        position.set(
-          ...layout.cellPosition(indexFromLinear(index, object.shape)),
-        );
-        matrix.compose(position, quaternion, scale);
-        if (selection.mask[index])
-          selected.setMatrixAt(selectedIndex++, matrix);
-        else ordinary.setMatrixAt(ordinaryIndex++, matrix);
-      }
-      for (const mesh of [ordinary, selected])
-        if (mesh) {
-          mesh.instanceMatrix.needsUpdate = true;
-          mesh.computeBoundingSphere();
+      // Each 4D batch rotates around its own center, rather than orbiting as a group.
+      const batches = [];
+      const perBatch = total / layout.batchOffsets.length;
+      layout.batchOffsets.forEach((batchOffset, batchIndex) => {
+        const batch = new THREE.Group();
+        batch.position.set(...batchOffset);
+        group.add(batch);
+        batches.push(batch);
+        const start = batchIndex * perBatch;
+        let selectedCount = 0;
+        for (let index = start; index < start + perBatch; index++)
+          selectedCount += selection.mask[index];
+        const ordinaryCount = perBatch - selectedCount;
+        const ordinary = ordinaryCount
+          ? new THREE.InstancedMesh(
+              this.geometry,
+              material(object.color, selection.count > 0),
+              ordinaryCount,
+            )
+          : null;
+        const selected = selectedCount
+          ? new THREE.InstancedMesh(
+              this.geometry,
+              material(object.highlightColor, false),
+              selectedCount,
+            )
+          : null;
+        for (const mesh of [ordinary, selected])
+          if (mesh) {
+            mesh.userData.objectId = object.id;
+            batch.add(mesh);
+          }
+        let ordinaryIndex = 0,
+          selectedIndex = 0;
+        for (let index = start; index < start + perBatch; index++) {
+          position.set(
+            ...layout.cellPosition(indexFromLinear(index, object.shape)),
+          );
+          position.sub(batch.position);
+          matrix.compose(position, quaternion, scale);
+          if (selection.mask[index])
+            selected.setMatrixAt(selectedIndex++, matrix);
+          else ordinary.setMatrixAt(ordinaryIndex++, matrix);
         }
+        for (const mesh of [ordinary, selected])
+          if (mesh) {
+            mesh.instanceMatrix.needsUpdate = true;
+            mesh.computeBoundingSphere();
+          }
+      });
       this.scene.add(group);
       const objectBounds = new THREE.Box3(
         new THREE.Vector3(...layout.min).add(offset),
@@ -163,7 +207,9 @@ export class TensorViewer {
       label.className = "scene-label";
       label.textContent = object.name;
       label.title = `聚焦 ${object.name}`;
-      label.addEventListener("click", () => this.onSelect?.(object.id));
+      label.addEventListener("click", () => {
+        if (!this.animating) this.onSelect?.(object.id);
+      });
       this.labels.append(label);
       const labelPoint = new THREE.Vector3(...UP)
         .multiplyScalar(-layout.height / 2 - 0.65)
@@ -171,6 +217,7 @@ export class TensorViewer {
       this.entries.push({
         id: object.id,
         group,
+        batches,
         bounds: objectBounds,
         label,
         labelPoint,
@@ -184,10 +231,90 @@ export class TensorViewer {
           new THREE.Vector3(2, 2, 2),
         )
       : bounds;
-    if (geometryChanged) {
+    if (geometryChanged && !preserveCamera) {
       this.focusedId = null;
       this.centerOn(this.bounds);
     } else this.requestRender();
+  }
+
+  async animateRotation(id, direction, objects) {
+    const selected = this.entries.find((entry) => entry.id === id);
+    if (!selected) return;
+    const spec = rotationSpec(direction);
+    const layouts = sceneLayout(objects);
+    const bounds = new THREE.Box3();
+    const targets = new Map(
+      objects.map((object, index) => {
+        const layout = layouts[index];
+        const offset = new THREE.Vector3(...layout.offset);
+        const objectBounds = new THREE.Box3(
+          new THREE.Vector3(...layout.min).add(offset),
+          new THREE.Vector3(...layout.max).add(offset),
+        );
+        bounds.union(objectBounds);
+        return [object.id, { layout, offset, bounds: objectBounds }];
+      }),
+    );
+    const movements = this.entries
+      .map((entry) => ({
+        entry,
+        from: entry.group.position.clone(),
+        labelFrom: entry.labelPoint.clone(),
+        target: targets.get(entry.id),
+      }))
+      .filter((item) => item.target);
+    const batchStarts = selected.batches.map((batch) => batch.position.clone());
+    const batchEnds = targets
+      .get(id)
+      .layout.batchOffsets.map((point) => new THREE.Vector3(...point));
+    const oldAnchor =
+      this.entries.find((entry) => entry.id === this.focusedId)?.bounds ||
+      this.bounds;
+    const newAnchor = targets.get(this.focusedId)?.bounds || bounds;
+    const shift = newAnchor
+      .getCenter(new THREE.Vector3())
+      .sub(oldAnchor.getCenter(new THREE.Vector3()));
+    const cameraStart = this.camera.position.clone();
+    const targetStart = this.controls.target.clone();
+    const axis = new THREE.Vector3(...spec.axis);
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches
+      ? 0
+      : 650;
+    this.animating = true;
+    this.controls.enabled = false;
+    try {
+      await new Promise((resolve) => {
+        const start = performance.now();
+        const tick = (now) => {
+          const progress = duration ? Math.min(1, (now - start) / duration) : 1;
+          const t =
+            progress < 0.5
+              ? 4 * progress ** 3
+              : 1 - (-2 * progress + 2) ** 3 / 2;
+          for (const { entry, from, labelFrom, target } of movements) {
+            entry.group.position.lerpVectors(from, target.offset, t);
+            const labelEnd = new THREE.Vector3(...UP)
+              .multiplyScalar(-target.layout.height / 2 - 0.65)
+              .add(target.offset);
+            entry.labelPoint.lerpVectors(labelFrom, labelEnd, t);
+          }
+          selected.batches.forEach((batch, index) => {
+            batch.quaternion.setFromAxisAngle(axis, spec.angle * t);
+            batch.position.lerpVectors(batchStarts[index], batchEnds[index], t);
+          });
+          this.camera.position.copy(cameraStart).addScaledVector(shift, t);
+          this.controls.target.copy(targetStart).addScaledVector(shift, t);
+          this.requestRender();
+          if (progress < 1) requestAnimationFrame(tick);
+          else resolve();
+        };
+        requestAnimationFrame(tick);
+      });
+    } finally {
+      this.animating = false;
+      this.controls.enabled = true;
+    }
   }
 
   setActive(id) {

@@ -12,6 +12,24 @@ export const UP = [
 export const PITCH = 1.09;
 export const dot = (a, b) => a.reduce((sum, n, i) => sum + n * b[i], 0);
 
+export function sceneLayout(objects) {
+  const layouts = objects.map((object) => tensorLayout(object.shape));
+  const columns = Math.ceil(Math.sqrt(objects.length));
+  const rows = Math.ceil(objects.length / (columns || 1));
+  const cellWidth = Math.max(1, ...layouts.map((layout) => layout.width)) + 5;
+  const cellHeight = Math.max(1, ...layouts.map((layout) => layout.height)) + 5;
+  return layouts.map((layout, i) => {
+    const row = Math.floor(i / columns);
+    const inRow = Math.min(columns, objects.length - row * columns);
+    const across = ((i % columns) - (inRow - 1) / 2) * cellWidth;
+    const above = ((rows - 1) / 2 - row) * cellHeight;
+    return {
+      ...layout,
+      offset: RIGHT.map((v, d) => v * across + UP[d] * above),
+    };
+  });
+}
+
 export function tensorLayout(shape) {
   const rank = shape.length;
   const [depth, rows, columns] =

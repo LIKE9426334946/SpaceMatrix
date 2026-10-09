@@ -215,6 +215,59 @@
           ><button class="reset-button" id="reset-view">
             <span data-icon="reset"></span>重置视角
           </button>
+          <span class="control-divider"></span>
+          <button
+            class="reset-button flip-toggle"
+            id="flip-toggle"
+            aria-expanded="false"
+            aria-controls="flip-panel"
+            disabled
+          >
+            <span data-icon="flip"></span>翻转
+          </button>
+          <div
+            class="flip-panel"
+            id="flip-panel"
+            role="group"
+            aria-label="翻转选中的张量"
+            hidden
+          >
+            <div class="flip-heading">
+              <strong id="flip-name">翻转张量</strong><span>每次 90°</span>
+            </div>
+            <output
+              id="flip-shape"
+              class="flip-shape"
+              aria-live="polite"
+            ></output>
+            <div class="flip-directions">
+              <button type="button" data-flip="up" aria-label="向上翻转 90 度">
+                <span data-icon="up"></span>向上
+              </button>
+              <button
+                type="button"
+                data-flip="down"
+                aria-label="向下翻转 90 度"
+              >
+                <span data-icon="down"></span>向下
+              </button>
+              <button
+                type="button"
+                data-flip="left"
+                aria-label="向左翻转 90 度"
+              >
+                <span data-icon="left"></span>向左
+              </button>
+              <button
+                type="button"
+                data-flip="right"
+                aria-label="向右翻转 90 度"
+              >
+                <span data-icon="right"></span>向右
+              </button>
+            </div>
+            <p id="flip-hint">高亮随方块移动 · 翻转后自动保存</p>
+          </div>
         </div>
         <div class="axis-note" id="axis-note">
           <span class="axis-symbol">↗</span
@@ -230,7 +283,7 @@
             aria-label="选择展示对象"
           ></div>
           <span class="interaction-hint"
-            >拖动旋转<span>·</span>滚轮缩放<span>·</span>右键平移</span
+            >点击选中<span>·</span>拖动旋转<span>·</span>滚轮缩放</span
           >
         </div>
       </section>

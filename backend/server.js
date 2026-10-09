@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { parseShape, selectRegion } from "../public/tensor.js";
+import { rotateTensor } from "../public/rotation.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = process.env.DATA_DIR || path.join(root, "backend/data");
@@ -51,14 +52,19 @@ function validateObject(value) {
 function mutate(action) {
   const pending = writeQueue.then(async () => {
     const next = structuredClone(state);
-    action(next);
+    const transition = action(next);
+    const fromRevision = state.revision;
     next.revision++;
     await writeFile(`${dataFile}.tmp`, JSON.stringify(next, null, 2));
     await rename(`${dataFile}.tmp`, dataFile);
     state = next;
+    const update =
+      transition?.type === "rotate"
+        ? { ...state, transition: { ...transition, fromRevision } }
+        : state;
     for (const client of clients)
-      client.write(`event: scene\ndata: ${JSON.stringify(state)}\n\n`);
-    return state;
+      client.write(`event: scene\ndata: ${JSON.stringify(update)}\n\n`);
+    return update;
   });
   writeQueue = pending.catch(() => {});
   return pending;
@@ -141,6 +147,23 @@ const server = http.createServer(async (req, res) => {
           next.objects.push({ id: randomUUID(), ...object }),
         );
         return json(res, 201, saved);
+      }
+      const rotation = route.match(/^\/api\/objects\/([\w-]+)\/rotate$/);
+      if (rotation && req.method === "POST") {
+        const { direction } = await body(req);
+        const saved = await mutate((next) => {
+          const index = next.objects.findIndex(
+            (object) => object.id === rotation[1],
+          );
+          if (index < 0)
+            throw Object.assign(new Error("这个对象已被删除。"), {
+              status: 404,
+            });
+          const rotated = rotateTensor(next.objects[index], direction);
+          next.objects[index] = { id: rotated.id, ...validateObject(rotated) };
+          return { type: "rotate", objectId: rotated.id, direction };
+        });
+        return json(res, 200, saved);
       }
       const match = route.match(/^\/api\/objects\/([\w-]+)$/);
       if (match && ["PATCH", "DELETE"].includes(req.method)) {

@@ -66,16 +66,13 @@ function axisIndices(token, size) {
   return indices;
 }
 
-export function selectRegion(shape, expression = "") {
-  const total = elementCount(shape);
-  const mask = new Uint8Array(total);
-  if (!expression.trim()) return { mask, count: 0, total };
+export function selectionAxes(shape, expression = "") {
+  if (!expression.trim()) return [];
   if (expression.length > 1000) throw new Error("索引表达式过长。");
   const regions = expression.split(";").map((r) => r.trim());
   if (regions.length > 16 || regions.some((r) => !r))
     throw new Error("用分号分隔区域，最多 16 个区域。");
-  let count = 0;
-  for (const region of regions) {
+  return regions.map((region) => {
     const wrapped = region.match(/^(?:[A-Za-z_]\w*)?\s*\[([^\[\]]*)\]$/);
     let body = wrapped ? wrapped[1] : region;
     body = body.replace(/\s/g, "").replace(/,$/, "");
@@ -92,7 +89,15 @@ export function selectRegion(shape, expression = "") {
         t === "..." ? Array(shape.length - explicit).fill(":") : [t],
       );
     else while (tokens.length < shape.length) tokens.push(":");
-    const axes = tokens.map((token, d) => axisIndices(token, shape[d]));
+    return tokens.map((token, d) => axisIndices(token, shape[d]));
+  });
+}
+
+export function selectRegion(shape, expression = "") {
+  const total = elementCount(shape);
+  const mask = new Uint8Array(total);
+  let count = 0;
+  for (const axes of selectionAxes(shape, expression)) {
     const visit = (dimension, offset) => {
       if (dimension === shape.length) {
         if (!mask[offset]) {

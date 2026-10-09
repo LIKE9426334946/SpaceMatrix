@@ -6,6 +6,7 @@ import {
   selectRegion,
   examplesFor,
 } from "./tensor.js";
+import { rotatedShape, rotationSpec } from "./rotation.js";
 
 const icons = {
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -13,6 +14,11 @@ const icons = {
   cube: '<path d="m12 3 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8"/>',
   expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
   reset: '<path d="M3 10a9 9 0 1 1 2.5 8M3 4v6h6"/>',
+  flip: '<path d="M4 8h12l-3-3m7 11H8l3 3M20 8l-4-4M4 16l4 4"/>',
+  up: '<path d="M12 20V4m-6 6 6-6 6 6"/>',
+  down: '<path d="M12 4v16m-6-6 6 6 6-6"/>',
+  left: '<path d="M20 12H4m6-6-6 6 6 6"/>',
+  right: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 10v7m4-7v7"/>',
   chevron: '<path d="m9 5 7 7-7 7"/>',
@@ -40,6 +46,9 @@ let activeId = null;
 let isNew = false;
 let dirty = false;
 let saving = false;
+let animating = false;
+let sceneUpdates = Promise.resolve();
+let flipMessage = "";
 let viewer;
 let toastTimer;
 
@@ -76,6 +85,7 @@ function activeObject() {
 }
 
 function updateInfo(object = activeObject()) {
+  updateFlipControls();
   $("info-card").hidden = !object;
   $("axis-note").hidden = !object || object.shape.length < 3;
   if (!object) return;
@@ -129,6 +139,7 @@ function markDirty(value) {
   $("save-hint").textContent = value
     ? "预览尚未保存 · 点击保存同步到展示页"
     : "保存后自动同步到展示页";
+  updateFlipControls();
 }
 
 function fillForm(object) {
@@ -172,7 +183,7 @@ function updateExamples(shape) {
 }
 
 function activate(id, focus = false) {
-  if (saving) return;
+  if (saving || animating) return;
   if (dirty && !window.confirm("当前修改尚未保存，要放弃修改并切换对象吗？"))
     return;
   activeId = id;
@@ -186,8 +197,49 @@ function activate(id, focus = false) {
 }
 
 function acceptScene(next, force = false) {
+  // SSE and the write response can contain the same revision. Apply it only once.
+  const pending = sceneUpdates.then(() => applyScene(next, force));
+  sceneUpdates = pending.catch(() => {});
+  return pending;
+}
+
+async function applyScene(next, force) {
   if (next.revision < scene.revision) return;
   if (next.revision === scene.revision && !force) return;
+  const transition = next.transition;
+  const shouldAnimate =
+    viewer &&
+    !dirty &&
+    !isNew &&
+    transition?.type === "rotate" &&
+    transition.fromRevision === scene.revision &&
+    scene.objects.some((object) => object.id === transition.objectId);
+  if (shouldAnimate) {
+    animating = true;
+    const before = scene.objects.find(
+      (object) => object.id === transition.objectId,
+    );
+    const after = next.objects.find(
+      (object) => object.id === transition.objectId,
+    );
+    flipMessage =
+      transition.objectId === activeId
+        ? `${formatShape(before.shape)} → ${formatShape(after.shape)}`
+        : "";
+    updateBusyControls();
+    try {
+      await viewer.animateRotation(
+        transition.objectId,
+        transition.direction,
+        next.objects,
+      );
+    } catch (error) {
+      console.error(error);
+    } finally {
+      animating = false;
+      flipMessage = "";
+    }
+  }
   scene = next;
   if (!scene.objects.some((o) => o.id === activeId)) {
     activeId = scene.objects[0]?.id ?? null;
@@ -201,10 +253,11 @@ function acceptScene(next, force = false) {
     previewDraft();
     return;
   }
-  viewer?.setObjects(scene.objects);
+  viewer?.setObjects(scene.objects, { preserveCamera: Boolean(shouldAnimate) });
   renderLists();
   updateInfo();
   if (admin && !isNew) fillForm(activeObject());
+  updateBusyControls();
 }
 
 function readDraft() {
@@ -222,7 +275,7 @@ function readDraft() {
 
 let previewTimer;
 function previewDraft() {
-  if (!admin) return;
+  if (!admin || saving || animating) return;
   markDirty(true);
   clearTimeout(previewTimer);
   previewTimer = setTimeout(() => {
@@ -256,14 +309,99 @@ async function request(url, method, value) {
 }
 function setSaving(value) {
   saving = value;
-  $("save-object").disabled = value;
-  $("delete-object").disabled = value;
-  $("add-object").disabled = value;
-  $("confirm-delete").disabled = value;
+  updateBusyControls();
 }
 
+function updateBusyControls() {
+  const busy = saving || animating;
+  for (const id of [
+    "save-object",
+    "delete-object",
+    "add-object",
+    "create-first",
+    "confirm-delete",
+    "reset-view",
+    "zoom-in",
+    "zoom-out",
+  ])
+    $(id).disabled = busy;
+  $("object-form").inert = busy;
+  $("object-list").inert = busy;
+  $("object-tabs").inert = busy;
+  updateFlipControls();
+}
+
+function updateFlipControls(direction) {
+  const object = activeObject();
+  const blocked = !object || !viewer || saving || animating || dirty || isNew;
+  $("flip-toggle").disabled = !object || !viewer;
+  document.querySelectorAll("[data-flip]").forEach((el) => {
+    el.disabled = blocked;
+  });
+  $("flip-name").textContent = object ? `翻转 ${object.name}` : "翻转张量";
+  $("flip-shape").textContent =
+    flipMessage ||
+    (!object
+      ? "请选择一个对象"
+      : direction && !blocked
+        ? `${formatShape(object.shape)} → ${formatShape(rotatedShape(object.shape, direction))}`
+        : formatShape(object.shape));
+  $("flip-hint").textContent =
+    dirty || isNew
+      ? "请先保存当前修改，再翻转"
+      : animating
+        ? "正在翻转…"
+        : saving
+          ? "正在保存…"
+          : "高亮随方块移动 · 翻转后自动保存";
+}
+
+function closeFlipPanel() {
+  $("flip-panel").hidden = true;
+  $("flip-toggle").setAttribute("aria-expanded", "false");
+}
+
+$("flip-toggle").addEventListener("click", () => {
+  const open = $("flip-panel").hidden;
+  $("flip-panel").hidden = !open;
+  $("flip-toggle").setAttribute("aria-expanded", String(open));
+  updateFlipControls();
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!event.target.closest(".view-controls")) closeFlipPanel();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("flip-panel").hidden) {
+    closeFlipPanel();
+    $("flip-toggle").focus();
+  }
+});
+document.querySelectorAll("[data-flip]").forEach((el) => {
+  el.addEventListener("mouseenter", () => updateFlipControls(el.dataset.flip));
+  el.addEventListener("focus", () => updateFlipControls(el.dataset.flip));
+  el.addEventListener("mouseleave", () => updateFlipControls());
+  el.addEventListener("blur", () => updateFlipControls());
+  el.addEventListener("click", async () => {
+    if (saving || animating || dirty || isNew || !activeObject()) return;
+    closeFlipPanel();
+    $("flip-toggle").focus();
+    setSaving(true);
+    try {
+      const next = await request(`/api/objects/${activeId}/rotate`, "POST", {
+        direction: el.dataset.flip,
+      });
+      await acceptScene(next);
+      toast(`已${rotationSpec(el.dataset.flip).label}翻转 90°，形状已保存`);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      setSaving(false);
+    }
+  });
+});
+
 function addObject() {
-  if (saving) return;
+  if (saving || animating) return;
   if (dirty && !window.confirm("当前修改尚未保存，要放弃修改并创建对象吗？"))
     return;
   isNew = true;
@@ -298,7 +436,7 @@ $("clear-highlight").addEventListener("click", () => {
 });
 $("object-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (saving) return;
+  if (saving || animating) return;
   clearTimeout(previewTimer);
   try {
     const draft = readDraft();
@@ -313,7 +451,7 @@ $("object-form").addEventListener("submit", async (event) => {
     isNew = false;
     markDirty(false);
     clearTimeout(previewTimer);
-    acceptScene(next, true);
+    await acceptScene(next, true);
     toast(creating ? "对象已添加，展示页已同步" : "修改已保存，展示页已同步");
   } catch (error) {
     $("form-error").textContent = error.message;
@@ -331,7 +469,7 @@ $("delete-object").addEventListener("click", () => {
 });
 $("cancel-delete").addEventListener("click", () => $("delete-dialog").close());
 $("confirm-delete").addEventListener("click", async () => {
-  if (saving) return;
+  if (saving || animating) return;
   setSaving(true);
   clearTimeout(previewTimer);
   try {
@@ -339,7 +477,7 @@ $("confirm-delete").addEventListener("click", async () => {
     isNew = false;
     markDirty(false);
     clearTimeout(previewTimer);
-    acceptScene(next, true);
+    await acceptScene(next, true);
     $("delete-dialog").close();
     toast("对象已删除");
   } catch (error) {
@@ -376,7 +514,7 @@ async function load() {
   try {
     const response = await fetch("/api/scene");
     if (!response.ok) throw new Error("读取场景失败");
-    acceptScene(await response.json());
+    await acceptScene(await response.json());
   } catch {
     $("loading-state").hidden = false;
     $("loading-state").textContent = "暂时无法连接服务器，正在重试…";
@@ -384,9 +522,9 @@ async function load() {
 }
 load();
 const events = new EventSource("/api/events");
-events.addEventListener("scene", (event) => {
+events.addEventListener("scene", async (event) => {
   try {
-    acceptScene(JSON.parse(event.data));
+    await acceptScene(JSON.parse(event.data));
   } catch (error) {
     console.error(error);
     toast("场景更新失败，请刷新页面。", true);

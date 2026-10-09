@@ -5,6 +5,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { rotateTensor } from "../public/rotation.js";
 
 test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", async (t) => {
   const data = await mkdtemp(path.join(tmpdir(), "spacematrix-test-"));
@@ -88,11 +89,49 @@ test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", a
   assert.equal(created.objects.length, 2);
   const id = created.objects.at(-1).id;
   assert.match(new TextDecoder().decode((await reader.read()).value), /batch/);
+  const [rotationStatus, rotated] = await request(
+    `/api/objects/${id}/rotate`,
+    "POST",
+    { direction: "up" },
+  );
+  assert.equal(rotationStatus, 200);
+  assert.deepEqual(
+    rotated.objects.at(-1),
+    rotateTensor(created.objects.at(-1), "up"),
+  );
+  assert.deepEqual(rotated.transition, {
+    type: "rotate",
+    objectId: id,
+    direction: "up",
+    fromRevision: created.revision,
+  });
+  const rotationEvent = new TextDecoder().decode((await reader.read()).value);
+  assert.match(rotationEvent, /"type":"rotate"/);
+  assert.match(rotationEvent, /"direction":"up"/);
+  assert.equal(
+    (await request("/api/scene"))[1].transition,
+    undefined,
+    "snapshots do not replay animations",
+  );
+  assert.equal(
+    (
+      await request(`/api/objects/${id}/rotate`, "POST", {
+        direction: "invalid",
+      })
+    )[0],
+    400,
+  );
+  assert.equal(
+    (
+      await request("/api/objects/missing/rotate", "POST", { direction: "up" })
+    )[0],
+    404,
+  );
   abort.abort();
   await reader.cancel().catch(() => {});
   const invalid = await request("/api/objects/" + id, "PATCH", { shape: [21] });
   assert.equal(invalid[0], 400);
-  assert.equal((await request("/api/scene"))[1].revision, created.revision);
+  assert.equal((await request("/api/scene"))[1].revision, rotated.revision);
   assert.equal(
     (
       await request("/api/objects", "POST", { ...input, highlight: "a[99]" })
@@ -108,9 +147,14 @@ test("HTTP CRUD, validation, SSE, concurrent updates and restart persistence", a
     request("/api/objects/" + id, "PATCH", { name: "renamed" }),
     request("/api/objects/" + id, "PATCH", { highlight: "a[1,...]" }),
   ]);
+  await Promise.all([
+    request(`/api/objects/${id}/rotate`, "POST", { direction: "left" }),
+    request(`/api/objects/${id}/rotate`, "POST", { direction: "left" }),
+  ]);
   const saved = (await request("/api/scene"))[1];
   assert.equal(saved.objects.at(-1).name, "renamed");
-  assert.equal(saved.objects.at(-1).highlight, "a[1,...]");
+  assert.deepEqual(saved.objects.at(-1).shape, [2, 4, 3, 5]);
+  assert.equal(saved.objects.at(-1).highlight, "a[1, :, :, :]");
   assert.deepEqual(
     JSON.parse(await readFile(path.join(data, "scene.json"), "utf8")),
     saved,
